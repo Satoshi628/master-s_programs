@@ -1,0 +1,253 @@
+import os
+import random
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+import numpy as np
+import torch
+from torchvision import datasets, transforms
+from torch.utils.data.dataset import Subset
+
+# from third_party.celebamask_hq import Data_Loader
+from dataset import MVTecDataset
+
+def set_seeds(seed=0, fully_deterministic=True):
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    if fully_deterministic:
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
+
+def myprint(statement, noflg=False):
+    if not noflg:
+        print(statement)
+
+
+def get_loader(dataset, path_dataset, sub_category, bs=64, n_work=2):
+    
+    if dataset == "MVtecAD":
+        train_dataset = MVTecDataset("/mnt/kamiya/dataset/MVtec_AD", category=sub_category, input_size=[256, 256], is_train=True)
+        test_dataset = MVTecDataset("/mnt/kamiya/dataset/MVtec_AD", category=sub_category, input_size=[256, 256], is_train=False)
+    elif dataset == "Denso_new":
+        train_dataset = MVTecDataset("/mnt/kamiya/dataset/DENSO_D/", category=sub_category, input_size=[384, 576], is_train=True)
+        test_dataset = MVTecDataset("/mnt/kamiya/dataset/DENSO_D/", category=sub_category, input_size=[384, 576], is_train=False)
+    elif dataset == "Denso_no_new":
+        train_dataset = MVTecDataset("/mnt/kamiya/dataset/DENSO_D/", category=sub_category, input_size=[320, 480], is_train=True)
+        test_dataset = MVTecDataset("/mnt/kamiya/dataset/DENSO_D/", category=sub_category, input_size=[320, 480], is_train=False)
+    train_loader = torch.utils.data.DataLoader(
+        train_dataset,
+        batch_size=8,
+        shuffle=True,
+        num_workers=4,
+        drop_last=True,
+    )
+    val_loader = torch.utils.data.DataLoader(
+        test_dataset,
+        batch_size=8,
+        shuffle=False,
+        num_workers=4,
+        drop_last=False,
+    )
+    test_loader = torch.utils.data.DataLoader(
+        test_dataset,
+        batch_size=8,
+        shuffle=False,
+        num_workers=4,
+        drop_last=False,
+    )
+    return train_loader, val_loader, test_loader
+
+
+def logits_to_onehot(prob, n_class=19):
+    size = prob.size()
+    label_idx = torch.argmin(prob, dim=1, keepdim=True)
+    oneHot_size = (size[0], n_class, size[2], size[3])
+    label = torch.cuda.FloatTensor(torch.Size(oneHot_size)).zero_()
+    label = label.scatter_(1, label_idx.data.long().cuda(), 1.0)
+
+    return label
+
+
+
+## Generate images
+def plot_images(images, filename, nrows=4, ncols=8, flg_norm=False):
+    if images.shape[1] == 1:
+        images = np.repeat(images, 3, axis=1)
+    fig = plt.figure(figsize=(nrows * 2, ncols))
+    gs = gridspec.GridSpec(nrows * 2, ncols)
+    gs.update(wspace=0.05, hspace=0.05)
+    for i, image in enumerate(images):
+        ax = plt.subplot(gs[i])
+        plt.axis("off")
+        ax.set_xticklabels([])
+        ax.set_yticklabels([])
+        ax.set_aspect("equal")
+        if flg_norm:
+            plt.imshow(image.transpose((1,2,0)) * 0.5 + 0.5)
+        else:
+            plt.imshow(image.transpose((1,2,0)))
+
+    dirname = os.path.dirname(filename)
+    if not os.path.isdir(dirname):
+        os.makedirs(dirname)
+    plt.savefig(filename, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_images_paper(images, filename, nrows=4, ncols=8, flg_norm=False):
+    if images.shape[1] == 1:
+        images = np.repeat(images, 3, axis=1)
+    fig = plt.figure(figsize=(nrows, ncols))
+    gs = gridspec.GridSpec(nrows, ncols)
+    gs.update(wspace=0.05, hspace=0.05)
+    for i, image in enumerate(images):
+        ax = plt.subplot(gs[i])
+        plt.axis("off")
+        ax.set_aspect("equal")
+        if flg_norm:
+            plt.imshow(image.transpose((1,2,0)) * 0.5 + 0.5)
+        else:
+            plt.imshow(image.transpose((1,2,0)))
+
+    dirname = os.path.dirname(filename)
+    if not os.path.isdir(dirname):
+        os.makedirs(dirname)
+    plt.savefig(filename, bbox_inches="tight")
+    plt.close(fig)
+
+
+
+## CelebA Mask
+def idx_to_onehot(idx, n_class=19):
+    size = idx.size()
+    oneHot_size = (size[0], n_class, size[2], size[3])
+    label = torch.cuda.FloatTensor(torch.Size(oneHot_size)).zero_()
+    label = label.scatter_(1, idx.data.long().cuda(), 1.0)
+
+    return label
+
+
+def logits_to_onehot(prob, n_class=19):
+    size = prob.size()
+    label_idx = torch.argmin(prob, dim=1, keepdim=True)
+    oneHot_size = (size[0], n_class, size[2], size[3])
+    label = torch.cuda.FloatTensor(torch.Size(oneHot_size)).zero_()
+    label = label.scatter_(1, label_idx.data.long().cuda(), 1.0)
+
+    return label
+
+
+def uint82bin(n, count=8):
+    """returns the binary of integer n, count refers to amount of bits"""
+    return "".join([str((n >> y) & 1) for y in range(count-1, -1, -1)])
+
+
+def labelcolormap(N):
+    if N == 19: # CelebAMask-HQ
+        cmap = np.array([(0,  0,  0), (204, 0,  0), (76, 153, 0),
+                     (204, 204, 0), (51, 51, 255), (204, 0, 204), (0, 255, 255),
+                     (51, 255, 255), (102, 51, 0), (255, 0, 0), (102, 204, 0),
+                     (255, 255, 0), (0, 0, 153), (0, 0, 204), (255, 51, 153), 
+                     (0, 204, 204), (0, 51, 0), (255, 153, 51), (0, 204, 0)], 
+                     dtype=np.uint8) 
+    else:
+        cmap = np.zeros((N, 3), dtype=np.uint8)
+        for i in range(N):
+            r, g, b = 0, 0, 0
+            id = i
+            for j in range(7):
+                str_id = uint82bin(id)
+                r = r ^ (np.uint8(str_id[-1]) << (7-j))
+                g = g ^ (np.uint8(str_id[-2]) << (7-j))
+                b = b ^ (np.uint8(str_id[-3]) << (7-j))
+                id = id >> 3
+            cmap[i, 0] = r
+            cmap[i, 1] = g
+            cmap[i, 2] = b
+    return cmap
+
+
+class Colorize(object):
+    def __init__(self, n=19):
+        self.cmap = labelcolormap(n)
+        self.cmap = torch.from_numpy(self.cmap[:n])
+
+    def __call__(self, gray_image):
+        size = gray_image.size()
+        color_image = torch.ByteTensor(3, size[1], size[2]).fill_(0)
+
+        for label in range(0, len(self.cmap)):
+            mask = (label == gray_image[0]).cpu()
+            color_image[0][mask] = self.cmap[label][0]
+            color_image[1][mask] = self.cmap[label][1]
+            color_image[2][mask] = self.cmap[label][2]
+
+        return color_image
+
+
+def tensor2label(label_tensor, n_label, imtype=np.uint8):
+    label_tensor = label_tensor.cpu().float()
+    if label_tensor.size()[0] > 1:
+        label_tensor = label_tensor.max(0, keepdim=True)[1]
+    label_tensor = Colorize(n_label)(label_tensor)
+    label_numpy = label_tensor.numpy()
+    label_numpy = label_numpy / 255.0
+
+    return label_numpy
+
+
+def generate_label(inputs, imsize):
+    pred_batch = []
+    for input in inputs:
+        input = input.view(1, 19, imsize, imsize)
+        pred = np.squeeze(input.data.max(1)[1].cpu().numpy(), axis=0)
+        pred_batch.append(pred)
+
+    pred_batch = np.array(pred_batch)
+    pred_batch = torch.from_numpy(pred_batch)
+            
+    label_batch = []
+    for p in pred_batch:
+        p = p.view(1, imsize, imsize)
+        label_batch.append(tensor2label(p, 19))
+                
+    label_batch = np.array(label_batch)
+    label_batch = torch.from_numpy(label_batch)	
+
+    return label_batch
+
+
+def label_to_segment(label, nclass=19):
+    color_list = [[0., 0., 0],
+        [204., 0., 0],
+        [76., 153., 0],
+        [204., 204., 0],
+        [51., 51., 255.],
+        [204., 0., 204],
+        [0., 255., 255.],
+        [51., 255., 255.],
+        [102., 51., 0],
+        [255., 0., 0],
+        [102., 204., 0],
+        [255., 255., 0],
+        [0., 0., 153],
+        [0., 0., 204],
+        [255., 51., 153],
+        [0., 204., 204],
+        [0., 51., 0],
+        [255., 153., 51],
+        [0., 204., 0]
+    ]
+    color_torch = torch.tensor(color_list).cuda()
+    shape = label.shape
+    label_permuted = label.permute(0, 2, 3, 1).contiguous()
+    label_reshaped = label_permuted.view(-1, nclass)
+    label_colored = label_reshaped @ color_torch
+    label_colored_reshaped = label_colored.view(shape[0], shape[2], shape[3], 3)
+    label_colored_permuted = label_colored_reshaped.permute(0, 3, 1, 2).contiguous()
+
+    return label_colored_permuted

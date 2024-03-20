@@ -1,0 +1,131 @@
+#coding: utf-8
+#----- 標準ライブラリ -----#
+#None
+#----- 専用ライブラリ -----#
+import numpy as np
+import torch
+import torchvision
+import torch.nn as nn
+import torch.nn.functional as F
+
+#----- 自作モジュール -----#
+#None
+
+def one_hot_changer(tensor, vector_dim, dim=-1, bool_=False):
+    """index tensorをone hot vectorに変換する関数
+
+    Args:
+        tensor (torch.tensor,dtype=torch.long): index tensor
+        vector_dim (int): one hot vectorの次元。index tensorの最大値以上の値でなくてはならない
+        dim (int, optional): one hot vectorをどこの次元に組み込むか. Defaults to -1.
+        bool_ (bool, optional): Trueにするとbool型になる。Falseの場合はtorch.float型. Defaults to False.
+
+    Raises:
+        TypeError: index tensor is not torch.long
+        ValueError: index tensor is greater than vector_dim
+
+    Returns:
+        torch.tensor: one hot vector
+    """    
+    if bool_:
+        data_type = bool
+    else:
+        data_type = torch.float
+    if tensor.dtype != torch.long:
+        raise TypeError("入力テンソルがtorch.long型ではありません")
+    if tensor.max() >= vector_dim:
+        raise ValueError("入力テンソルのindex番号がvector_dimより大きくなっています")
+    
+    #one hot vector用単位行列
+    one_hot = torch.eye(vector_dim, dtype=data_type, device=tensor.device)
+    vector = one_hot[tensor,]
+    
+    #one hot vectorの次元変更
+    dim_change_list = list(range(tensor.dim()))
+    #もし-1ならそのまま出力
+    if dim == -1:
+        return vector
+    #もしdimがマイナスならスライス表記と同じ性質にする
+    if dim < 0:
+        dim += 1 #omsertは-1が最後から一つ手前
+    
+    dim_change_list.insert(dim, tensor.dim())
+    vector = vector.permute(dim_change_list)
+    return vector
+
+class Classification():
+    def __init__(self,classes):
+        self.classes = classes
+        self.total = 0.
+        self.Top1 = 0.
+        self.Top5 = 0.
+
+    
+    def _reset(self):
+        self.total = 0.
+        self.Top1 = 0.
+        self.Top5 = 0.
+    
+    def update(self, outputs, targets):
+        """calculate accuracy
+
+        Args:
+            outputs (torch.Tensor[batch,classes]): model output
+            targets (torch.Trnsor[batch]): label Long
+        """        
+        _, class_idx = outputs.max(dim=-1)
+        self.total += class_idx.size(0)
+        self.Top1 += (class_idx == targets).sum().item()
+
+        _, class_idx = torch.topk(outputs, 5, dim=-1)
+        self.Top5 += torch.any(class_idx == targets[:, None], dim=-1).sum().item()
+
+
+    def __call__(self):
+        Top1_acc = self.Top1 / self.total
+        Top5_acc = self.Top5 / self.total
+        self._reset()
+        return Top1_acc, Top5_acc
+
+class IoU():
+    def __init__(self, classification):
+        self.__classification = classification
+        self.__Intersection = 0.
+        self.__union = 0.
+        self.mode_list = ['softmax','sigmoid','linear']
+        
+    def _reset(self):
+        self.__Intersection = 0.
+        self.__union = 0.
+    
+    def update(self, outputs, targets, mode='softmax'):
+        assert mode in ['softmax','sigmoid','linear'], "IoUのmodeが例外を発生させています。"
+        
+        #各種モードで処理
+        if mode == "softmax":
+            outputs = F.softmax(outputs, dim=1)
+        elif mode == "sigmoid":
+            outputs = torch.sigmoid(outputs)
+        elif mode == "linear":
+            pass
+
+
+        predicted = outputs.max(dim=1)[1]
+        #one hot vector化
+        pre_one_hot_vector = one_hot_changer(predicted, self.__classification, dim=1, bool_=True)
+        label_one_hot_vector = one_hot_changer(targets, self.__classification, dim=1, bool_=True)
+        
+        #ラベルと一致するとandでそのクラスがTrueになる。
+        #unionはorで求めることができる
+        #batch,H,Wでそれらを加算する
+        #self.__Intersection.size() => [class]
+        self.__Intersection += (pre_one_hot_vector & label_one_hot_vector).sum(dim=(0, 2, 3))
+        self.__union += (pre_one_hot_vector | label_one_hot_vector).sum(dim=(0, 2, 3))
+
+    def __call__(self):  #IoUとmean_IoUが出力される。
+        IoU = (self.__Intersection / (self.__union + 1e-24))
+        mean_IoU = IoU.mean()
+
+        self._reset()
+
+        return IoU, mean_IoU
